@@ -82,7 +82,7 @@ def train(epoch):
         epoch = torch.Tensor([epoch])
         y, aux_head = net(inputs, epoch)
 
-        loss_y = criterion(outputs, labels)
+        loss_y = criterion(y, labels)
         loss_aux_head = criterion(aux_head, labels)
         
         loss = loss_y + 0.4 * loss_aux_head
@@ -113,7 +113,7 @@ def test(epoch):
         for images, labels in testloader:
             images, labels = images.to(device), labels.to(device)
         
-            outputs = net(images)
+            outputs, _ = net(images)
             loss = criterion(outputs, labels)
         
             test_loss += loss.item()
@@ -131,7 +131,7 @@ def test(epoch):
 best_acc = 0
 
 if __name__ == "__main__":
-    for epoch in range(500):
+    for epoch in range(300):
         train(epoch)
         test(epoch)
     print("THE best accuracy:", best_acc)
