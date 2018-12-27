@@ -69,7 +69,8 @@ def create_cell_base(x, x_1, num_of_filters):
     bn = nn.BatchNorm2d(num_of_filters, eps=1e-3)
     
     return bn(conv(relu(x))), x_1
-    
+ 
+ 
 """
     综合考虑epoch和cell_idx，以确定drop probability
 """
@@ -187,9 +188,14 @@ def max_layer(x, num_of_filters, stride=1, keep_prob=1):
     
  
 class Normal_cell(nn.Module):
-    def __init__(self, filters, weight_decay, keep_prob, 
+    """ 
+        x_channels是x的filter的个数
+        filters是想让x变成的filter的个数
+    """
+    def __init__(self, x_channels, filters, keep_prob, 
                  cell_idx, total_cells, max_epochs):
         super(Normal_cell, self).__init__()
+        
         # set parameters
         self.filters = filters
         self.keep_prob = keep_prob
@@ -197,7 +203,14 @@ class Normal_cell(nn.Module):
         self.total_cells = total_cells
         self.max_epochs = max_epochs
         
-        print("Build normal_cell %d, filters=%d" %(cell_idx, filters))
+        # set base layer 
+        # 使得x_1的长宽与x相同，并将x_1和x的filters个数变成num_of_filters
+        self.cell_base_relu = nn.ReLU()
+        self.cell_base_conv = nn.Conv2d(x_channels, self.filters, 1, stride=1)
+        self.cell_base_bn = nn.BatchNorm2d(self.filters, eps=1e-3)
+        
+        print("Build normal_cell %d, input filters=%d, output filters(one branch)=%d" 
+              %(cell_idx, x_channels, filters))
         
         
     def forward(self, x, x_1, epoch):
@@ -206,11 +219,7 @@ class Normal_cell(nn.Module):
         """
         x_1 = reduce_prev_layer(x, x_1, self.filters)
         
-        cell_base_relu = nn.ReLU()
-        cell_base_conv = nn.Conv2d(x.shape[1], self.filters, 1, stride=1)
-        cell_base_bn = nn.BatchNorm2d(self.filters, eps=1e-3)
-        
-        x = cell_base_bn(cell_base_conv(cell_base_relu(x)))
+        x = self.cell_base_bn(self.cell_base_conv(self.cell_base_relu(x)))
         
         """
             再确定drop probability，综合考虑epoch和cell_idx
@@ -243,7 +252,7 @@ class Normal_cell(nn.Module):
         
         
 class Reduction_cell(nn.Module):
-    def __init__(self, filters, weight_decay, stride,
+    def __init__(self, x_channels, filters, stride,
                  keep_prob, cell_idx, total_cells, max_epochs):
         super(Reduction_cell, self).__init__()
         # set parameters
@@ -254,7 +263,12 @@ class Reduction_cell(nn.Module):
         self.total_cells = total_cells
         self.max_epochs = max_epochs
         
-        print("Build reduction_cell %d, filters=%d" %(cell_idx, filters))
+        self.cell_base_relu = nn.ReLU()
+        self.cell_base_conv = nn.Conv2d(x_channels, self.filters, 1, stride=1)
+        self.cell_base_bn = nn.BatchNorm2d(self.filters, eps=1e-3)
+        
+        print("Build reduction_cell %d, input filters=%d, output filters(one branch)=%d" 
+              %(cell_idx, x_channels, filters))
         
     def forward(self, x, x_1, epoch):
         """
@@ -262,11 +276,7 @@ class Reduction_cell(nn.Module):
         """
         x_1 = reduce_prev_layer(x, x_1, self.filters)
         
-        cell_base_relu = nn.ReLU()
-        cell_base_conv = nn.Conv2d(x.shape[1], self.filters, 1, stride=1)
-        cell_base_bn = nn.BatchNorm2d(self.filters, eps=1e-3)
-        
-        x = cell_base_bn(cell_base_conv(cell_base_relu(x)))
+        x = self.cell_base_bn(self.cell_base_conv(self.cell_base_relu(x)))
         
         """
             再确定drop probability，综合考虑epoch和cell_idx
@@ -340,7 +350,7 @@ def Head(x, num_classes):
     
 
 class NASnet(nn.Module):
-    def __init__(self, num_normal_cells=6, num_blocks=2, weight_decay=1e-4,
+    def __init__(self, num_normal_cells=6, num_blocks=3,
                  num_classes=10, num_filters=32, stem_multiplier=3, filter_multiplier=2,
                  dimension_reduction=2, final_filters=768, 
                  dropout_prob=0.0, drop_path_keep=0.6, max_epochs=300):
@@ -356,41 +366,56 @@ class NASnet(nn.Module):
         filters = num_filters
         self.stem = self.create_stem(filters, stem_multiplier)
         
-        self.layer_norm1_1 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_1 = Normal_cell(filters * stem_multiplier, filters, drop_path_keep,
                                          1, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm1_2 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_2 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          2, num_normal_cells * num_blocks, max_epochs) 
-        self.layer_norm1_3 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_3 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          3, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm1_4 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_4 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          4, num_normal_cells * num_blocks, max_epochs) 
-        self.layer_norm1_5 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_5 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          5, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm1_6 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm1_6 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          6, num_normal_cells * num_blocks, max_epochs) 
-                                                     
+        
+        old_filters = filters
         filters *= filter_multiplier
         
-        self.layer_redu1 = Reduction_cell(filters, weight_decay, dimension_reduction,
+        self.layer_redu1 = Reduction_cell(old_filters * 5, filters, dimension_reduction,
                                           drop_path_keep, 7, num_normal_cells * num_blocks, max_epochs)
           
-        self.layer_norm2_1 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_1 = Normal_cell(filters * 3, filters, drop_path_keep,
                                          8, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm2_2 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_2 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          9, num_normal_cells * num_blocks, max_epochs) 
-        self.layer_norm2_3 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_3 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          10, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm2_4 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_4 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          11, num_normal_cells * num_blocks, max_epochs) 
-        self.layer_norm2_5 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_5 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          12, num_normal_cells * num_blocks, max_epochs)
-        self.layer_norm2_6 = Normal_cell(filters, weight_decay, drop_path_keep,
+        self.layer_norm2_6 = Normal_cell(filters * 5, filters, drop_path_keep,
                                          13, num_normal_cells * num_blocks, max_epochs) 
-                                                     
+        
+        old_filters = filters
         filters *= filter_multiplier
         
-        self.layer_redu2 = Reduction_cell(filters, weight_decay, dimension_reduction,
+        self.layer_redu2 = Reduction_cell(old_filters * 5, filters, dimension_reduction,
                                           drop_path_keep, 14, num_normal_cells * num_blocks, max_epochs)
+                                          
+        self.layer_norm3_1 = Normal_cell(filters * 3, filters, drop_path_keep,
+                                         15, num_normal_cells * num_blocks, max_epochs)
+        self.layer_norm3_2 = Normal_cell(filters * 5, filters, drop_path_keep,
+                                         16, num_normal_cells * num_blocks, max_epochs) 
+        self.layer_norm3_3 = Normal_cell(filters * 5, filters, drop_path_keep,
+                                         17, num_normal_cells * num_blocks, max_epochs)
+        self.layer_norm3_4 = Normal_cell(filters * 5, filters, drop_path_keep,
+                                         18, num_normal_cells * num_blocks, max_epochs) 
+        self.layer_norm3_5 = Normal_cell(filters * 5, filters, drop_path_keep,
+                                         19, num_normal_cells * num_blocks, max_epochs)
+        self.layer_norm3_6 = Normal_cell(filters * 5, filters, drop_path_keep,
+                                         20, num_normal_cells * num_blocks, max_epochs)
     
     
     def create_stem(self, filters, stem_multiplier):
@@ -463,6 +488,30 @@ class NASnet(nn.Module):
         x_1 = x
         x = y
         
+        y = self.layer_norm3_1(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
+        y = self.layer_norm3_2(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
+        y = self.layer_norm3_3(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
+        y = self.layer_norm3_4(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
+        y = self.layer_norm3_5(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
+        y = self.layer_norm3_6(x, x_1, epoch)
+        x_1 = x
+        x = y
+        
         y = Head(x, self.num_classes)
         
         return y, aux_head
@@ -472,6 +521,7 @@ class NASnet(nn.Module):
     测试各函数的功能
 """
 if __name__ == "__main__":
+    """
     x = torch.randn(1, 3, 32, 32)
     y = factorized_reduction(x, 32, 2)
     print(y.shape)
@@ -501,7 +551,7 @@ if __name__ == "__main__":
     print(y.shape)
     
     
-    normal_cell = Normal_cell(64, weight_decay=1, keep_prob=1, 
+    normal_cell = Normal_cell(64, keep_prob=1, 
                               cell_idx=1, total_cells=12, max_epochs=300)
     x = torch.randn(1, 64, 16, 16)
     x_1 = torch.randn(1, 32, 32, 32)
@@ -509,7 +559,7 @@ if __name__ == "__main__":
     print(y.shape)
                               
     
-    reduction_cell = Reduction_cell(32, weight_decay=1, stride=2, keep_prob=1, 
+    reduction_cell = Reduction_cell(32, stride=2, keep_prob=1, 
                                     cell_idx=1, total_cells=12, max_epochs=300)
     x = torch.randn(1, 16, 32, 32)
     x_1 = torch.randn(1, 16, 32, 32)
@@ -525,7 +575,7 @@ if __name__ == "__main__":
     x = torch.randn(1, 128, 32, 32)
     y = Head(x, num_classes=10)
     print(y.shape)
-    
+    """ 
     
     print("---------network----------")
     net = NASnet()
