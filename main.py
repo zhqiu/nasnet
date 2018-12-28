@@ -11,11 +11,14 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.transforms as transforms
 
-from nasnet_pytorch import *
+from nasnet import *
 
 import time
 
 from tqdm import tqdm     # progress bar
+
+import os
+os.environ["CUDA_VISIBLE_DEVICES"]='2'
 
 
 """
@@ -79,8 +82,7 @@ def train(epoch):
 
         optimizer.zero_grad()
 
-        epoch = torch.Tensor([epoch])
-        y, aux_head = net(inputs, epoch)
+        y, aux_head = net(inputs)
 
         loss_y = criterion(y, labels)
         loss_aux_head = criterion(aux_head, labels)

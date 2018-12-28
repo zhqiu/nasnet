@@ -1,6 +1,8 @@
 """
     From https://github.com/ErikGartner/wasp-cifar10/blob/master/nasnet.py
     But I use pytorch here
+    
+    与nasnet_pytorch不同，这里只在最后加dropout
 """
 
 import torch
@@ -77,22 +79,6 @@ class Reduce_prev_layer(nn.Module):
             x_1 = self.bn(x_1)
             
         return x_1
- 
- 
-"""
-    综合考虑epoch和cell_idx，以确定drop probability
-"""
-def calc_drop_keep_prob(keep_prob, cell_idx, total_cells, epoch, max_epochs):
-    if keep_prob == 1:
-        return 1
-        
-    prob = keep_prob
-    layer_ratio = cell_idx / total_cells
-    prob = 1 - layer_ratio * (1 - prob)
-    current_ratio = epoch / max_epochs
-    prob = (1 - current_ratio * (1 - prob))
-    
-    return prob
     
     
 """
@@ -120,9 +106,8 @@ class SepConv(nn.Module):
             nn.BatchNorm2d(C_out, eps=1e-3),
         )
         
-    def forward(self, x, keep_prob=1):
-        dropout = nn.Dropout2d(keep_prob)
-        return dropout(self.op(x))
+    def forward(self, x):
+        return self.op(x)
         
     
  
@@ -170,13 +155,12 @@ class avg_layer(nn.Module):
             nn.BatchNorm2d(self.C_out, eps=1e-3)
         )
         
-    def forward(self, x, keep_prob=1):
-        dropout = nn.Dropout2d(keep_prob)
+    def forward(self, x):
         
         if self.C_in != self.C_out:
-            return dropout(self.op(x))
+            return self.op(x)
         
-        return dropout(self.avg_pool(x))
+        return self.avg_pool(x)
    
 
 """
@@ -203,13 +187,12 @@ class max_layer(nn.Module):
             nn.BatchNorm2d(self.C_out, eps=1e-3)
         )
         
-    def forward(self, x, keep_prob=1):
-        dropout = nn.Dropout2d(keep_prob)
+    def forward(self, x):
         
         if self.C_in != self.C_out:
-            return dropout(self.op(x))
+            return self.op(x)
             
-        return dropout(self.max_pool(x))
+        return self.max_pool(x)
         
     
  
@@ -219,12 +202,11 @@ class Normal_cell(nn.Module):
         filters是想让x变成的filter的个数
     """
     def __init__(self, x_width, x_1_width, x_channels, x_1_channels,
-                 filters, keep_prob, cell_idx, total_cells, max_epochs):
+                 filters, cell_idx, total_cells, max_epochs):
         super(Normal_cell, self).__init__()
         
         # set parameters
         self.filters = filters
-        self.keep_prob = keep_prob
         self.cell_idx = cell_idx
         self.total_cells = total_cells
         self.max_epochs = max_epochs
@@ -252,39 +234,32 @@ class Normal_cell(nn.Module):
               %(cell_idx, x_channels, filters))
         
         
-    def forward(self, x, x_1, epoch):
+    def forward(self, x, x_1):
         """
             先使得x_1的长宽与x相同，并将x_1和x的filters个数变成num_of_filters
         """
         x_1 = self.reduce_prev_layer(x, x_1)
         
         x = self.cell_base_bn(self.cell_base_conv(self.cell_base_relu(x)))
-
-        
-        """
-            再确定drop probability，综合考虑epoch和cell_idx
-        """
-        dp_prob = calc_drop_keep_prob(self.keep_prob, self.cell_idx,
-                                      self.total_cells, epoch, self.max_epochs)
                                       
-        y1_a = self.sepConv_y1_a(x, keep_prob=dp_prob)
+        y1_a = self.sepConv_y1_a(x)
         y1_b = self.identity_y1_b(x)
         y1 = y1_a + y1_b
                
-        y2_a = self.sepConv_y2_a(x_1, keep_prob=dp_prob)
-        y2_b = self.sepConv_y2_b(x, keep_prob=dp_prob)
+        y2_a = self.sepConv_y2_a(x_1)
+        y2_b = self.sepConv_y2_b(x)
         y2 = y2_a + y2_b
         
-        y3_a = self.avg_layer_y3_a(x, keep_prob=dp_prob)
+        y3_a = self.avg_layer_y3_a(x)
         y3_b = self.identity_y3_b(x_1)
         y3 = y3_a + y3_b
         
-        y4_a = self.avg_layer_y4_a(x_1, keep_prob=dp_prob)
-        y4_b = self.avg_layer_y4_b(x_1, keep_prob=dp_prob)
+        y4_a = self.avg_layer_y4_a(x_1)
+        y4_b = self.avg_layer_y4_b(x_1)
         y4 = y4_a + y4_b
         
-        y5_a = self.sepConv_y5_a(x_1, keep_prob=dp_prob)
-        y5_b = self.sepConv_y5_b(x_1, keep_prob=dp_prob)
+        y5_a = self.sepConv_y5_a(x_1)
+        y5_b = self.sepConv_y5_b(x_1)
         y5 = y5_a + y5_b
         
         return torch.cat([y1, y2, y3, y4, y5], dim=1)
@@ -293,13 +268,11 @@ class Normal_cell(nn.Module):
         
 class Reduction_cell(nn.Module):
     def __init__(self, x_width, x_1_width, x_channels, x_1_channels, 
-                 filters, stride,
-                 keep_prob, cell_idx, total_cells, max_epochs):
+                 filters, stride, cell_idx, total_cells, max_epochs):
         super(Reduction_cell, self).__init__()
         # set parameters
         self.filters = filters
         self.stride = stride
-        self.keep_prob = keep_prob
         self.cell_idx = cell_idx
         self.total_cells = total_cells
         self.max_epochs = max_epochs
@@ -325,7 +298,7 @@ class Reduction_cell(nn.Module):
         print("Build reduction_cell %d, input filters=%d, output filters(one branch)=%d" 
               %(cell_idx, x_channels, filters))
         
-    def forward(self, x, x_1, epoch):
+    def forward(self, x, x_1):
         """
             先使得x_1的长宽与x相同，并将x_1和x的filters个数变成num_of_filters
         """
@@ -333,29 +306,23 @@ class Reduction_cell(nn.Module):
  
         x = self.cell_base_bn(self.cell_base_conv(self.cell_base_relu(x)))
         
-        """
-            再确定drop probability，综合考虑epoch和cell_idx
-        """
-        dp_prob = calc_drop_keep_prob(self.keep_prob, self.cell_idx,
-                                      self.total_cells, epoch, self.max_epochs)
-        
-        y1_a = self.sepConv_y1_a(x_1, keep_prob=dp_prob)
-        y1_b = self.sepConv_y1_b(x, keep_prob=dp_prob)
+        y1_a = self.sepConv_y1_a(x_1)
+        y1_b = self.sepConv_y1_b(x)
         y1 = y1_a + y1_b
         
-        y2_a = self.max_layer_y2_a(x, keep_prob=dp_prob)
-        y2_b = self.sepConv_y2_b(x_1, keep_prob=dp_prob)
+        y2_a = self.max_layer_y2_a(x)
+        y2_b = self.sepConv_y2_b(x_1)
         y2 = y2_a + y2_b
         
-        y3_a = self.avg_layer_y3_a(x, keep_prob=dp_prob)
-        y3_b = self.sepConv_y3_b(x_1, keep_prob=dp_prob)
+        y3_a = self.avg_layer_y3_a(x)
+        y3_b = self.sepConv_y3_b(x_1)
         y3 = y3_a + y3_b
         
-        z1_a = self.max_layer_z1_a(x, keep_prob=dp_prob)
-        z1_b = self.sepConv_z1_b(y1, keep_prob=dp_prob)
+        z1_a = self.max_layer_z1_a(x)
+        z1_b = self.sepConv_z1_b(y1)
         z1 = z1_a + z1_b
         
-        z2_a = self.avg_layer_z2_a(y1, keep_prob=dp_prob)
+        z2_a = self.avg_layer_z2_a(y1)
         z2_b = self.identity_z2_b(y2)
         z2 = z2_a + z2_b
         
@@ -404,11 +371,13 @@ class Head(nn.Module):
         self.global_pooling = nn.AdaptiveAvgPool2d(1)
         self.flatten = Flatten()
         self.fc = nn.Linear(x_channels, num_classes)
+        self.dropout = nn.Dropout(0.5)
         
     def forward(self, x):
         x = self.relu(x)
         x = self.global_pooling(x)
         x = self.flatten(x)
+        x = self.dropout(x)
         x = self.fc(x)
         
         return nn.Softmax(dim=1)(x)
@@ -418,8 +387,7 @@ class Head(nn.Module):
 class NASnet(nn.Module):
     def __init__(self, num_normal_cells=6, num_blocks=3,
                  num_classes=10, num_filters=32, stem_multiplier=3, filter_multiplier=2,
-                 dimension_reduction=2, final_filters=768, 
-                 dropout_prob=0.0, drop_path_keep=0.6, max_epochs=300):
+                 dimension_reduction=2, final_filters=768, max_epochs=300):
                  
         super(NASnet, self).__init__()
         
@@ -434,75 +402,57 @@ class NASnet(nn.Module):
         
         # 对应norm1_1，x_1 = x
         self.layer_norm1_1 = Normal_cell(32, 32, filters * stem_multiplier, filters * stem_multiplier, 
-                                         filters, drop_path_keep,
-                                         1, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 1, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm1_2 = Normal_cell(32, 32, filters * 5, filters * stem_multiplier,
-                                         filters, drop_path_keep,
-                                         2, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 2, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm1_3 = Normal_cell(32, 32, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         3, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 3, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm1_4 = Normal_cell(32, 32, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         4, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 4, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm1_5 = Normal_cell(32, 32, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         5, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 5, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm1_6 = Normal_cell(32, 32, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         6, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 6, num_normal_cells * num_blocks, max_epochs) 
         
         old_filters = filters
         filters *= filter_multiplier
         
         self.layer_redu1 = Reduction_cell(32, 32, old_filters * 5, old_filters * 5,
                                           filters, dimension_reduction,
-                                          drop_path_keep, 6, num_normal_cells * num_blocks, max_epochs)
+                                          6, num_normal_cells * num_blocks, max_epochs)
           
         self.layer_norm2_1 = Normal_cell(16, 32, filters * 3, old_filters * 5,
-                                         filters, drop_path_keep,
-                                         7, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 7, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm2_2 = Normal_cell(16, 16, filters * 5, filters * 3, 
-                                         filters, drop_path_keep,
-                                         8, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 8, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm2_3 = Normal_cell(16, 16, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         9, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 9, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm2_4 = Normal_cell(16, 16, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         10, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 10, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm2_5 = Normal_cell(16, 16, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         11, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 11, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm2_6 = Normal_cell(16, 16, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         12, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 12, num_normal_cells * num_blocks, max_epochs) 
         
         old_filters = filters
         filters *= filter_multiplier
         
         self.layer_redu2 = Reduction_cell(16, 16, old_filters * 5, old_filters * 5,
                                           filters, dimension_reduction,
-                                          drop_path_keep, 12, num_normal_cells * num_blocks, max_epochs)
+                                          12, num_normal_cells * num_blocks, max_epochs)
                                           
         self.layer_norm3_1 = Normal_cell(8, 16, filters * 3, old_filters * 5,
-                                         filters, drop_path_keep,
-                                         13, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 13, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm3_2 = Normal_cell(8, 8, filters * 5, filters * 3, 
-                                         filters, drop_path_keep,
-                                         14, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 14, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm3_3 = Normal_cell(8, 8, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         15, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 15, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm3_4 = Normal_cell(8, 8, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         16, num_normal_cells * num_blocks, max_epochs) 
+                                         filters, 16, num_normal_cells * num_blocks, max_epochs) 
         self.layer_norm3_5 = Normal_cell(8, 8, filters * 5, filters * 5,
-                                         filters, drop_path_keep,
-                                         17, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 17, num_normal_cells * num_blocks, max_epochs)
         self.layer_norm3_6 = Normal_cell(8, 8, filters * 5, filters* 5, 
-                                         filters, drop_path_keep,
-                                         18, num_normal_cells * num_blocks, max_epochs)
+                                         filters, 18, num_normal_cells * num_blocks, max_epochs)
                                          
         self.head = Head(640, num_classes)
         self.auxhead = Auxhead(320, 4, num_classes, final_filters)
@@ -516,89 +466,89 @@ class NASnet(nn.Module):
         return stem
         
         
-    def forward(self, input, epoch):
+    def forward(self, input):
         x = self.stem(input)
         x_1 = None
         
-        y = self.layer_norm1_1(x, x_1, epoch)
+        y = self.layer_norm1_1(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm1_2(x, x_1, epoch)
+        y = self.layer_norm1_2(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm1_3(x, x_1, epoch)
+        y = self.layer_norm1_3(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm1_4(x, x_1, epoch)
+        y = self.layer_norm1_4(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm1_5(x, x_1, epoch)
+        y = self.layer_norm1_5(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm1_6(x, x_1, epoch)
+        y = self.layer_norm1_6(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_redu1(x, x_1, epoch)
+        y = self.layer_redu1(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_1(x, x_1, epoch)
+        y = self.layer_norm2_1(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_2(x, x_1, epoch)
+        y = self.layer_norm2_2(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_3(x, x_1, epoch)
+        y = self.layer_norm2_3(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_4(x, x_1, epoch)
+        y = self.layer_norm2_4(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_5(x, x_1, epoch)
+        y = self.layer_norm2_5(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm2_6(x, x_1, epoch)
+        y = self.layer_norm2_6(x, x_1)
         x_1 = x
         x = y
 
         aux_head = self.auxhead(x)
         
-        y = self.layer_redu2(x, x_1, epoch)
+        y = self.layer_redu2(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_1(x, x_1, epoch)
+        y = self.layer_norm3_1(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_2(x, x_1, epoch)
+        y = self.layer_norm3_2(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_3(x, x_1, epoch)
+        y = self.layer_norm3_3(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_4(x, x_1, epoch)
+        y = self.layer_norm3_4(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_5(x, x_1, epoch)
+        y = self.layer_norm3_5(x, x_1)
         x_1 = x
         x = y
         
-        y = self.layer_norm3_6(x, x_1, epoch)
+        y = self.layer_norm3_6(x, x_1)
         x_1 = x
         x = y
         
@@ -611,66 +561,11 @@ class NASnet(nn.Module):
     测试各函数的功能
 """
 if __name__ == "__main__":
-    """
-    x = torch.randn(1, 3, 32, 32)
-    y = factorized_reduction(x, 32, 2)
-    print(y.shape)
-    
-    
-    x = torch.randn(128, 32, 32, 32)
-    x_1 = torch.randn(128, 16, 64, 64)
-    x_1 = reduce_prev_layer(x, x_1, 32)
-    print(x_1.shape)
-    
-    
-    x = torch.randn(128, 32, 32, 32)
-    y = torch.randn(128, 16, 64, 64)
-    x, y = create_cell_base(x, y, 64)
-    print(x.shape)
-    print(y.shape)
-    
-    
-    x = torch.randn(1, 32, 64, 64)
-    y = avg_layer(x, num_of_filters=64, stride=1, keep_prob=1)
-    z = avg_layer(x, num_of_filters=32, stride=2, keep_prob=1)
-    print(y.shape)
-    print(z.shape)
-    
-    x = torch.randn(1, 32, 64, 64)
-    y = sepConv(x, num_of_filters=64, kernel_size=7, stride=2, keep_prob=1)
-    print(y.shape)
-    
-    
-    normal_cell = Normal_cell(64, keep_prob=1, 
-                              cell_idx=1, total_cells=12, max_epochs=300)
-    x = torch.randn(1, 64, 16, 16)
-    x_1 = torch.randn(1, 32, 32, 32)
-    y = normal_cell.forward(x, x_1, 1)
-    print(y.shape)
-                              
-    
-    reduction_cell = Reduction_cell(32, stride=2, keep_prob=1, 
-                                    cell_idx=1, total_cells=12, max_epochs=300)
-    x = torch.randn(1, 16, 32, 32)
-    x_1 = torch.randn(1, 16, 32, 32)
-    y = reduction_cell.forward(x, x_1, 1)
-    print(y.shape)
-    
-    
-    x = torch.randn(1, 128, 32, 32)
-    y = Auxhead(x, num_classes=10, final_filters=768)
-    print(y.shape)
-    
-    
-    x = torch.randn(1, 128, 32, 32)
-    y = Head(x, num_classes=10)
-    print(y.shape)
-    """ 
     
     print("---------network----------")
     net = NASnet()
     
     x = torch.randn(1, 3, 32, 32)
-    y, aux_head = net(x, 1)
+    y, aux_head = net(x)
     print(y.shape)
     print(aux_head.shape)
